@@ -6,15 +6,28 @@ A hardware implementation of Pac-Man running on a DE10-Standard FPGA, rendered l
 
 ---
 
+## Gameplay
+
+<!-- Add screenshots here. Place your photos in a docs/ folder and reference them, e.g.:
+![Level 1](docs/level1.jpg)
+![Level 2](docs/level2.jpg)
+-->
+
+The game runs live on the FPGA's VGA output. Level one is played on a blue maze; clearing its coins advances the player to a second level with a different green maze. Lives are shown as hearts in the top corner, the score and coin counters update in real time, and the three ghost types roam the maze.
+
+---
+
 ## From the starting demo to a game
 
 The provided demo did almost nothing: a sprite moved on its own and reversed at the borders. We rebuilt it into a full game by, among other things:
 
 - turning the drifting sprite into a **keyboard-controlled Pac-Man** that moves in four directions and is blocked by walls,
 - turning the inert color-changing shape into **collectible coins** and a **maze of walls**,
-- adding **ghosts** with their own movement and targeting logic,
+- adding **three kinds of ghosts** — one that wanders, one that chases, and one that does both,
+- adding a **power-up** that briefly lets Pac-Man eat the ghosts (which flee while it's active),
+- adding **two levels** with different maze layouts,
 - adding **lives, scoring, and a countdown**, shown on screen and on the 7-segment displays,
-- adding **destructible walls**, **random maze generation**, and **difficulty levels**,
+- adding **destructible walls** (broken block-by-block in the direction of travel), **random maze generation**, and difficulty scaling,
 - adding a **synthesized audio** layer for events and background music.
 
 ---
@@ -28,7 +41,7 @@ The whole system is **frame-synchronized**. The VGA controller emits a short `st
 Game behavior is built from **state machines (מכונת מצבים)** rather than ad-hoc logic:
 
 - **Player movement** is an FSM driven by the keyboard direction keys. It holds the current heading, advances Pac-Man one step per frame, and transitions out of a direction when a wall collision is detected ahead — so the player slides along corridors and stops at walls instead of clipping through them.
-- **Ghost behavior** alternates between modes (chase vs. scout/scatter, and a "good/bad" face that flips over time), with each mode being a state that selects a different targeting rule.
+- **Ghost behavior** — each of the three monster types is driven by a state machine that selects its targeting rule (wander, chase, or both) and switches to a flee state when Pac-Man is empowered.
 - **Game flow** (start → playing → life lost / level change) is sequenced as states gated by the per-frame pulse.
 
 ### Collision system
@@ -37,9 +50,27 @@ Each drawable object asserts a **drawing-request** signal while the raster scan 
 
 The subtle part is that an overlap spans *many* pixels within one frame, but an event (eat a coin, lose a life) must register **once**. We solve this with a per-frame **single-hit pulse**: a semaphore flag latches the first overlap of a frame and suppresses the rest, emitting a single clean pulse that the scoring and lives logic can consume without double-counting. This per-frame-debounce idea is the backbone of the whole game's correctness.
 
-### Ghost AI / pathfinding
+### Ghosts: three behaviors
 
-The chasing ghost computes its **next direction** each frame from the relative position of Pac-Man (chase toward the player) blended with a randomized component (scatter/scout), modulated by the current level. This reproduces the classic Pac-Man feel where ghosts pursue the player but aren't perfectly deterministic, and get more aggressive as difficulty rises.
+The game has **three monster types**, each its own block:
+
+- **Scout** — wanders the maze randomly, choosing a new direction at junctions and when it hits a wall.
+- **Chaser** — actively pursues Pac-Man, computing its next direction each frame from Pac-Man's relative position.
+- **Scout-and-Chase** — a hybrid that alternates between wandering and pursuing.
+
+Each monster's chase target is blended with a randomized component and scaled by the current level, so they get more aggressive as difficulty rises, and a `runMode` flips their behavior to *fleeing* when Pac-Man is empowered (below).
+
+### Power-up: eating the monsters
+
+A special **helper** pickup temporarily empowers Pac-Man. While it's active, **all three monsters** enter run/flee mode and Pac-Man can eat them on contact — eating a monster **adds to the score and resets that monster**, instead of costing the player a life. This inverts the normal collision outcome (monster contact usually costs a life), and the game logic switches which result a Pac-Man-vs-monster hit produces based on that state.
+
+### Levels
+
+The game has **two levels** with distinct maze layouts (the first on a blue field, the second on a green field). Clearing the coins on a level advances to the next; clearing the final level is the win condition.
+
+### Losing & game over
+
+Pac-Man starts with a fixed number of lives, shown as hearts on screen. Each time an **active (non-fleeing) monster** catches Pac-Man, the player loses a life. When lives reach **zero**, the game ends: a dedicated **game-over screen** is displayed, from which the player can **restart**. (When the player is empowered by the helper pickup, a monster contact has the opposite effect — see the power-up section above.)
 
 ### Maze & randomness
 
@@ -53,12 +84,14 @@ Sprites are small bitmaps (≤ 32×32, per the course's compile-time budget) com
 
 ## Features
 
-- Four-direction, wall-aware keyboard control
+- Four-direction, wall-aware keyboard control (arrow keys 2/4/6/8)
 - Collectible coins with live scoring
 - Lives and a time countdown (on-screen and 7-segment)
-- Ghosts with chase/scatter AI and a good/bad mode that affects the player
-- Destructible walls (degrade in stages) and a wall-breaking action
-- Pseudo-random maze generation and difficulty levels
+- Three ghost types: a wanderer, a chaser, and a hybrid
+- A power-up that lets Pac-Man eat the ghosts: all three flee, and eating one scores points and resets it
+- Destructible walls broken block-by-block in the direction of travel
+- Pseudo-random maze generation and two levels with different layouts
+- Lose a life when an active monster catches Pac-Man; at zero lives, a game-over screen lets the player restart
 - Synthesized sound effects and music
 
 ---
@@ -99,9 +132,18 @@ Some block names are inherited from the course base or are abbreviated, so they 
 - `level_adjust` — level progression and win condition (advances the level as coins are cleared)
 
 **Ghosts**
-- `MonsterChasing_NextDir` / `MonsterChasing_NextDir2` — ghost pathfinding: chooses the next direction toward Pac-Man, blended with randomness and scaled by level
-- `monster_mode_adjust` — ghost mode selector: switches between chase / random-scatter / run and outputs the chosen direction
+- `MonsterScout*` — the wandering ghost (random direction at junctions/walls)
+- `MonsterChasing*` (incl. `MonsterChasing_NextDir` / `NextDir2`) — the chasing ghost and its pathfinding: chooses the next direction toward Pac-Man, blended with randomness and scaled by level
+- `MonsterScoutANDChase*` / `MonsterChaseandScout*` — the hybrid ghost that both wanders and chases
+- `monster_mode_adjust` — per-ghost mode selector: switches between chase / random-scatter / run(flee) and outputs the chosen direction
 - `Monster_move`, `Monster2_move`, `monster_2_move`, `monsterChasing_move` — per-ghost movement drivers
+
+**Power-up, score & lives**
+- `HelperMatrixBitMap` / `HELPER_DISPLAY` — the "helper" pickup that empowers Pac-Man to eat the ghosts; level-dependent
+- `CoinsMatrixBitMap` / `COINS_DISPLAY` — the collectible coins and their counters
+- `HartsMatrixBitMap` / `HART_DISPLAY` — the lives ("Hart" = heart) display
+- `SoulsMatrixBitMap` / `SOULS_DISPLAY` — the souls/lives indicator
+- `Score_addr_counter`, `Score_square_object` — score accumulation and its on-screen display
 
 **Rendering**
 - `VGA_Controller` — VGA timing and current-pixel coordinate generator
@@ -109,8 +151,7 @@ Some block names are inherited from the course base or are abbreviated, so they 
 - `square_object` — generic rectangular bounding-box primitive ("is this pixel inside me?" + offset); the reusable base for positioned sprites such as walls and coins (it's a rectangle, not necessarily a square)
 - `square_Hart_object`, `Score_square_object` — the same primitive specialized for the lives ("Hart" = heart) and score displays
 - `back_ground_draw` — background image and maze borders; swaps to game-over / level / win backgrounds
-- `*BitMap` modules — sprite pixel data (Pac-Man, monsters, coins, hearts/souls, numbers)
-- `HelperMatrixBitMap` — sprite for the "helper" special object, a level-dependent entity Pac-Man can interact with
+- `*BitMap` modules — sprite pixel data (Pac-Man, monsters, numbers)
 - `valX` — a Quartus-generated constant (LPM_CONSTANT megafunction), not custom logic
 
 **Input & randomness**
