@@ -8,10 +8,8 @@ A hardware implementation of Pac-Man running on a DE10-Standard FPGA, rendered l
 
 ## Gameplay
 
-<!-- Add screenshots here. Place your photos in a docs/ folder and reference them, e.g.:
-![Level 1](docs/level1.jpg)
-![Level 2](docs/level2.jpg)
--->
+![Level 1 — blue maze](docs/Level1.jpg)
+   ![Level 2 — green maze](docs/Level2.jpg)
 
 The game runs live on the FPGA's VGA output. Level one is played on a blue maze; clearing its coins advances the player to a second level with a different green maze. Lives are shown as hearts in the top corner, the score and coin counters update in real time, and the three ghost types roam the maze.
 
